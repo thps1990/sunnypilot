@@ -158,7 +158,8 @@ class SpeedLimitResolver:
     if next_speed_limit <= 0. or speed_limit == next_speed_limit or distance_to_speed_limit_ahead <= 0.:
       self._adapting_speed_limit = 0.
 
-    # Predictive deceleration when approaching an upcoming lower speed limit
+    # Predictive deceleration when approaching an upcoming lower speed limit,
+    # or gentle acceleration slightly before an upcoming higher speed limit
     if 0. < next_speed_limit:
       offset = self._get_speed_limit_offset()
       target_speed = next_speed_limit + offset
@@ -170,11 +171,19 @@ class SpeedLimitResolver:
         self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
         self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
       elif target_speed < self.v_ego:
-        # Kinematic deceleration distance needed to reach target_speed at distance = 0
+        # Lower limit ahead: Kinematic deceleration distance needed to reach target_speed at distance = 0
         decel_acc = abs(LIMIT_ADAPT_ACC)
         adapt_distance = (self.v_ego ** 2 - target_speed ** 2) / (2.0 * decel_acc) + 20.0
 
         if distance_to_speed_limit_ahead <= adapt_distance:
+          self._adapting_speed_limit = next_speed_limit
+          self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
+          self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
+      elif target_speed > self.v_ego and next_speed_limit > speed_limit:
+        # Higher limit ahead: Start gently accelerating slightly before the sign (~2.5s / 25-50m ahead)
+        accel_distance = min(50.0, max(25.0, 2.5 * self.v_ego))
+
+        if distance_to_speed_limit_ahead <= accel_distance:
           self._adapting_speed_limit = next_speed_limit
           self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
           self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead

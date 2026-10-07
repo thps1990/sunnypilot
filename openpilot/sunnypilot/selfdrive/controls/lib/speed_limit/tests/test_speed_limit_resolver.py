@@ -145,3 +145,29 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     resolver._get_from_map_data(sm_mock)
     assert resolver.limit_solutions[SpeedLimitSource.map] == 0.
     assert resolver.distance_solutions[SpeedLimitSource.map] == 0.
+
+  def test_proactive_acceleration_ahead_of_higher_limit(self, resolver_class, mocker):
+    resolver = resolver_class()
+    resolver.policy = Policy.map_data_only
+    sm_mock = mocker.MagicMock()
+    gps_data = create_mock({
+      'unixTimestampMillis': time.monotonic() * 1e3,
+    }, mocker)
+
+    # 50 km/h currently, 100 km/h in 30 meters ahead, driving at 50 km/h (13.89 m/s)
+    v_ego = 50.0 / 3.6
+    live_map_data = create_mock({
+      'speedLimit': 50.0 / 3.6,
+      'speedLimitValid': True,
+      'speedLimitAhead': 100.0 / 3.6,
+      'speedLimitAheadValid': True,
+      'speedLimitAheadDistance': 30.0,
+    }, mocker)
+    sm_mock.__getitem__.side_effect = lambda key: {
+      'liveMapDataSP': live_map_data,
+      'gpsLocation': gps_data,
+      'carStateSP': mocker.MagicMock(),
+    }[key]
+
+    resolver.update(v_ego, sm_mock)
+    assert round(resolver.speed_limit * 3.6, 1) == 100.0
