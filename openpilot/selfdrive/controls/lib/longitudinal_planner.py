@@ -173,16 +173,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
     # Smooth positive acceleration during candidate or DEC mode transitions
+    # Only limit positive acceleration ramp-up; NEVER delay brake release (when a_prev < 0)
     if output_a_target > a_prev:
       j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
-      output_a_target = min(output_a_target, a_prev + j_cruise * self.dt)
+      output_a_target = min(output_a_target, max(0.0, a_prev) + j_cruise * self.dt)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     # Keep a_cruise synchronized to actual commanded acceleration while in E2E mode
-    # so exiting E2E mode smoothly ramps from the current acceleration level
+    # so exiting E2E mode smoothly ramps from the current acceleration level.
+    # Never clamp a_cruise into negative braking territory.
     if is_e2e:
-      self.a_cruise = min(self.a_cruise, self.output_a_target)
+      self.a_cruise = min(self.a_cruise, max(0.0, self.output_a_target))
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
 
