@@ -1,10 +1,10 @@
 import numpy as np
 from openpilot.common.realtime import DT_MDL
 
-ACCEL_BOOST_MAX = 0.6
+ACCEL_BOOST_MAX = 0.65
 ACCEL_BOOST_RATE = 0.4
-ACCEL_BOOST_TAP = 0.15
-ACCEL_BOOST_PER_OVERRIDE = 0.3
+ACCEL_BOOST_TAP = 0.20
+ACCEL_BOOST_PER_OVERRIDE = 0.35
 
 
 class AccelBoost:
@@ -28,7 +28,7 @@ class AccelBoost:
     if not gas_pressed:
       self.override_boost = 0.0
     elif enabled and model_limited:
-      # Initial boost step on rising edge of gas pedal
+      # Initial boost step on rising edge of gas pedal tap
       if not self.gas_pressed_prev:
         initial_bump = min(ACCEL_BOOST_TAP, ACCEL_BOOST_PER_OVERRIDE - self.override_boost, ACCEL_BOOST_MAX - self.value)
         self.value += initial_bump
