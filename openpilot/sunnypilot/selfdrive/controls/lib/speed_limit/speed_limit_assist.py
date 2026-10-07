@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 import math
 import time
+import numpy as np
 
 from openpilot.cereal import custom
 from opendbc.car.structs import car
@@ -139,9 +140,9 @@ class SpeedLimitAssist:
     # Fallback
     return V_CRUISE_UNSET
 
-  # TODO-SP: SLA's own output_a_target for planner
   def get_a_target_from_control(self) -> float:
-    return self.a_ego
+    solution = self.acceleration_solutions.get(self.state, self.get_current_acceleration_as_target)
+    return solution()
 
   def update_params(self) -> None:
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
@@ -196,13 +197,14 @@ class SpeedLimitAssist:
     return self.a_ego
 
   def get_adapting_state_target_acceleration(self) -> float:
-    if self._distance > 0:
-      return (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2. * self._distance)
+    if self._distance > 5.0:
+      accel = (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2. * self._distance)
+      return float(np.clip(accel, LIMIT_MIN_ACC, 0.0))
 
-    return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
+    return float(np.clip(self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N]), LIMIT_MIN_ACC, LIMIT_MAX_ACC))
 
   def get_active_state_target_acceleration(self) -> float:
-    return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
+    return float(np.clip(self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N]), LIMIT_MIN_ACC, LIMIT_MAX_ACC))
 
   def _update_confirmed_state(self):
     if self._has_speed_limit:

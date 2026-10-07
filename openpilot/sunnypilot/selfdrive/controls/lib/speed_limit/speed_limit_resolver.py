@@ -119,37 +119,53 @@ class SpeedLimitResolver:
     self._reset_limit_sources(SpeedLimitSource.map)
     self._process_map_data(sm)
 
-  def _process_map_data(self, sm: messaging.SubMaster) -> None:
-    gps_data = sm[self._gps_location_service]
-    map_data = sm['liveMapDataSP']
+  def _get_map_data_age(self, sm: messaging.SubMaster) -> float:
+    # 1. Prefer SubMaster message receive time for liveMapDataSP if available
+    if hasattr(sm, 'recv_time') and 'liveMapDataSP' in sm.recv_time and sm.recv_time['liveMapDataSP'] > 0:
+      return max(0.0, time.monotonic() - sm.recv_time['liveMapDataSP'])
 
-    gps_fix_age = time.monotonic() - gps_data.unixTimestampMillis * 1e-3
+    # 2. Check GPS timestamp: mock timestamp (<1e11) vs real UTC epoch timestamp (>=1e11)
+    gps_data = sm[self._gps_location_service]
+    if gps_data.unixTimestampMillis > 1e11:
+      return max(0.0, time.time() - gps_data.unixTimestampMillis * 1e-3)
+    else:
+      return max(0.0, time.monotonic() - gps_data.unixTimestampMillis * 1e-3)
+
+  def _process_map_data(self, sm: messaging.SubMaster) -> None:
+    gps_fix_age = self._get_map_data_age(sm)
     if gps_fix_age > LIMIT_MAX_MAP_DATA_AGE:
       return
 
+    map_data = sm['liveMapDataSP']
     speed_limit = map_data.speedLimit if map_data.speedLimitValid else 0.
     next_speed_limit = map_data.speedLimitAhead if map_data.speedLimitAheadValid else 0.
 
     self._calculate_map_data_limits(sm, speed_limit, next_speed_limit)
 
   def _calculate_map_data_limits(self, sm: messaging.SubMaster, speed_limit: float, next_speed_limit: float) -> None:
-    gps_data = sm[self._gps_location_service]
     map_data = sm['liveMapDataSP']
+    dt_since_fix = self._get_map_data_age(sm)
 
-    distance_since_fix = self.v_ego * (time.monotonic() - gps_data.unixTimestampMillis * 1e-3)
+    distance_since_fix = self.v_ego * dt_since_fix
     distance_to_speed_limit_ahead = max(0., map_data.speedLimitAheadDistance - distance_since_fix)
 
     self.limit_solutions[SpeedLimitSource.map] = speed_limit
     self.distance_solutions[SpeedLimitSource.map] = 0.
 
-    # FIXME-SP: this is not working as expected
-    if 0. < next_speed_limit < self.v_ego:
-      adapt_time = (next_speed_limit - self.v_ego) / LIMIT_ADAPT_ACC
-      adapt_distance = self.v_ego * adapt_time + 0.5 * LIMIT_ADAPT_ACC * adapt_time ** 2
+    # Predictive deceleration when approaching an upcoming lower speed limit
+    if 0. < next_speed_limit:
+      offset = self._get_speed_limit_offset()
+      target_speed = next_speed_limit + offset
 
-      if distance_to_speed_limit_ahead <= adapt_distance:
-        self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
-        self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
+      # Only adapt ahead of time if the upcoming target speed is lower than our current speed
+      if target_speed < self.v_ego:
+        # Kinematic deceleration distance needed to reach target_speed at distance = 0
+        decel_acc = abs(LIMIT_ADAPT_ACC)
+        adapt_distance = (self.v_ego ** 2 - target_speed ** 2) / (2.0 * decel_acc) + 10.0
+
+        if distance_to_speed_limit_ahead <= adapt_distance:
+          self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
+          self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
 
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[Policy(self.policy)]
