@@ -147,7 +147,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     if self.sla.is_active and self.sla.state == SpeedLimitAssistState.adapting:
-      self.a_cruise = min(self.a_cruise, self.output_a_target)
+      if self.a_cruise > self.output_a_target:
+        j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
+        self.a_cruise = max(self.output_a_target, self.a_cruise - j_cruise * self.dt)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
 
     model_limited = (is_e2e and

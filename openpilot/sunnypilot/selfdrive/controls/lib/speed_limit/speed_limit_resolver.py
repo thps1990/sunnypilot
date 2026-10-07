@@ -73,6 +73,7 @@ class SpeedLimitResolver:
     self.speed_limit_final = 0.
     self.speed_limit_final_last = 0.
     self.speed_limit_offset = 0.
+    self._adapting_speed_limit = 0.
 
   def update_speed_limit_states(self) -> None:
     self.speed_limit_final = self.speed_limit + self.speed_limit_offset
@@ -134,6 +135,7 @@ class SpeedLimitResolver:
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
     gps_fix_age = self._get_map_data_age(sm)
     if gps_fix_age > LIMIT_MAX_MAP_DATA_AGE:
+      self._adapting_speed_limit = 0.
       return
 
     map_data = sm['liveMapDataSP']
@@ -152,18 +154,28 @@ class SpeedLimitResolver:
     self.limit_solutions[SpeedLimitSource.map] = speed_limit
     self.distance_solutions[SpeedLimitSource.map] = 0.
 
+    # Reset adapting latch if upcoming limit is invalid, or if current limit caught up, or if distance is zero
+    if next_speed_limit <= 0. or speed_limit == next_speed_limit or distance_to_speed_limit_ahead <= 0.:
+      self._adapting_speed_limit = 0.
+
     # Predictive deceleration when approaching an upcoming lower speed limit
     if 0. < next_speed_limit:
       offset = self._get_speed_limit_offset()
       target_speed = next_speed_limit + offset
 
-      # Only adapt ahead of time if the upcoming target speed is lower than our current speed
-      if target_speed < self.v_ego:
+      is_currently_adapting = (self._adapting_speed_limit == next_speed_limit)
+
+      if is_currently_adapting:
+        # Latch: remain adapting until we pass the sign or the zone becomes active
+        self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
+        self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
+      elif target_speed < self.v_ego:
         # Kinematic deceleration distance needed to reach target_speed at distance = 0
         decel_acc = abs(LIMIT_ADAPT_ACC)
-        adapt_distance = (self.v_ego ** 2 - target_speed ** 2) / (2.0 * decel_acc) + 10.0
+        adapt_distance = (self.v_ego ** 2 - target_speed ** 2) / (2.0 * decel_acc) + 20.0
 
         if distance_to_speed_limit_ahead <= adapt_distance:
+          self._adapting_speed_limit = next_speed_limit
           self.limit_solutions[SpeedLimitSource.map] = next_speed_limit
           self.distance_solutions[SpeedLimitSource.map] = distance_to_speed_limit_ahead
 
