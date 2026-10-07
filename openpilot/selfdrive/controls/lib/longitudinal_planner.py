@@ -10,7 +10,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.accel_boost import AccelBoost
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource, get_T_FOLLOW
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
@@ -36,6 +36,34 @@ def get_max_accel(v_ego):
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+def get_lead_approach_accel(lead, v_ego: float, t_follow: float, d_stop: float = 5.0):
+  """Kinematic proactive deceleration when approaching a slower or stopped lead vehicle."""
+  if not lead.present or lead.modelProb < 0.5:
+    return None
+
+  v_lead = lead.vLead
+  v_rel = lead.vRel
+  d_rel = lead.dRel
+
+  # Only active if we are closing in (ego faster than lead by at least ~1.8 km/h)
+  if v_rel >= -0.5 or v_ego <= v_lead:
+    return None
+
+  # Target following distance when speeds match
+  d_target = t_follow * v_lead + d_stop
+  delta_d = d_rel - d_target
+
+  # Only proactive deceleration when ahead of target following distance
+  if delta_d <= 5.0:
+    return None
+
+  # Kinematic deceleration to match speed at delta_d:
+  # v_lead^2 = v_ego^2 + 2 * a * delta_d
+  accel = (v_lead ** 2 - v_ego ** 2) / (2.0 * delta_d)
+
+  # Limit to comfort brake range [-2.5, 0.0]
+  return float(np.clip(accel, -2.5, 0.0))
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
@@ -164,10 +192,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                             is_e2e=is_e2e, active=active, v_ego=v_ego)
     output_a_target_e2e = self.accel_boost.apply(output_a_target_e2e)
 
+    t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
+    lead_approach_candidates = []
+    for lead, source in ((sm['radarState'].leadOne, LongitudinalPlanSource.lead0),
+                         (sm['radarState'].leadTwo, LongitudinalPlanSource.lead1)):
+      a_lead_app = get_lead_approach_accel(lead, v_ego, t_follow)
+      if a_lead_app is not None:
+        lead_approach_candidates.append((a_lead_app, source, should_stop(v_ego, a_lead_app)))
+
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
       candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
+    candidates.extend(lead_approach_candidates)
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
