@@ -78,16 +78,6 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
-def get_approach_accel(personality=log.LongitudinalPersonality.standard):
-  if personality==log.LongitudinalPersonality.relaxed:
-    return 1.5
-  elif personality==log.LongitudinalPersonality.standard:
-    return 1.6
-  elif personality==log.LongitudinalPersonality.aggressive:
-    return 1.8
-  else:
-    raise NotImplementedError("Longitudinal personality not supported")
-
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
@@ -323,26 +313,11 @@ class LongitudinalMpc:
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
-    # Proactive deceleration when approaching a slower or stopped lead vehicle:
-    # Instead of waiting until harsh -2.5 m/s^2 comfort brake is required,
-    # expand the stopping distance equivalence so MPC begins smooth, human-like
-    # deceleration earlier (e.g. 1.5 - 1.8 m/s^2 depending on personality).
-    # When speeds match (steady-state following), delta_d is 0 and following distance is untouched.
-    a_approach = get_approach_accel(personality)
-    k_app = (1.0 / (2.0 * a_approach)) - (1.0 / (2.0 * COMFORT_BRAKE))
-    v_ego = self.x0[1]
-
-    delta_d_0 = np.maximum(0.0, (v_ego ** 2 - lead_xv_0[:, 1] ** 2) * k_app) if (radarstate.leadOne.present and radarstate.leadOne.modelProb > 0.5) else 0.0
-    delta_d_1 = np.maximum(0.0, (v_ego ** 2 - lead_xv_1[:, 1] ** 2) * k_app) if (radarstate.leadTwo.present and radarstate.leadTwo.modelProb > 0.5) else 0.0
-
-    min_obstacle_0 = MIN_X_LEAD_FACTOR * (v_ego ** 2) / (-ACCEL_MIN * 2)
-    min_obstacle_1 = MIN_X_LEAD_FACTOR * (v_ego ** 2) / (-ACCEL_MIN * 2)
-
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = np.maximum(min_obstacle_0, lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) - delta_d_0)
-    lead_1_obstacle = np.maximum(min_obstacle_1, lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) - delta_d_1)
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
     self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]

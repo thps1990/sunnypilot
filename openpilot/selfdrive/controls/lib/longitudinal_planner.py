@@ -175,11 +175,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
-    # Smooth positive acceleration during candidate or DEC mode transitions
-    # Only limit positive acceleration ramp-up; NEVER delay brake release (when a_prev < 0)
+    # Smooth positive acceleration during candidate or DEC mode transitions, and progressive brake release
     if output_a_target > a_prev:
-      j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
-      output_a_target = min(output_a_target, max(0.0, a_prev) + j_cruise * self.dt)
+      if a_prev < 0.0:
+        j_release = 2.5  # Smooth, progressive brake release rate (~0.3-0.4s to 0)
+        output_a_target = min(output_a_target, a_prev + j_release * self.dt)
+      else:
+        j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
+        output_a_target = min(output_a_target, a_prev + j_cruise * self.dt)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
