@@ -180,6 +180,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         self.a_cruise = max(self.output_a_target, self.a_cruise - j_cruise * self.dt)
       else:
         self.a_cruise = min(self.output_a_target, self.a_cruise + j_cruise * self.dt)
+    elif self.sla.is_active and getattr(self.sla, '_distance', 0.0) > 0.0 and v_cruise > v_ego:
+      # Pre-sign gentle acceleration when approaching an upcoming higher speed limit before the sign.
+      # Caps acceleration so the car gains only ~3 to 5 km/h by the time the sign is reached.
+      self.a_cruise = min(self.a_cruise, 0.45)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
 
     model_limited = (is_e2e and
