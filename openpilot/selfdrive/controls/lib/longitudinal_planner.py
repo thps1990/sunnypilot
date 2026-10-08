@@ -111,6 +111,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
+    # Synchronize filter to actual vehicle speed during braking/deceleration and standstill
+    # to prevent phantom speed lag from falsely triggering FCW or overestimating stopping needs
+    if self.output_a_target < 0.0 or sm['carState'].aEgo < -0.2:
+      self.v_desired_filter.x = min(self.v_desired_filter.x, v_ego + 0.3)
+    if sm['carState'].standstill or v_ego < 0.2:
+      self.v_desired_filter.x = min(self.v_desired_filter.x, v_ego)
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
@@ -160,19 +166,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     lead = sm['radarState'].leadOne
 
-    # Proactive kinematic approach deceleration when closing in on a slower lead vehicle
-    if lead.present and lead.modelProb > 0.5 and v_ego > (lead.vLead + 1.5):
+    # Proactive kinematic approach deceleration when closing in on a significantly slower lead vehicle at higher speeds.
+    # Strictly active only at road speeds (v_ego > 14 m/s ~ 50 km/h) with significant closing rate (delta_v > 3.5 m/s ~ 13 km/h)
+    # and deadband (a_approach < -0.25 m/s^2) to completely avoid micro-brake hunting during normal cruising.
+    if lead.present and lead.modelProb > 0.5 and v_ego > 14.0 and v_ego > (lead.vLead + 3.5):
       try:
         t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
       except Exception:
         t_follow = 1.45
       d_safe = t_follow * max(0.0, lead.vLead) + 4.0
       d_avail = lead.dRel - d_safe
-      if d_avail > 1.0:
+      if d_avail > 2.0:
         delta_v = v_ego - lead.vLead
         a_approach = - (delta_v ** 2) / (2.0 * d_avail)
-        a_approach = float(np.clip(a_approach, ACCEL_MIN, 0.0))
-        output_a_target_mpc = min(output_a_target_mpc, a_approach)
+        if a_approach < -0.25:
+          a_approach = float(np.clip(a_approach, ACCEL_MIN, 0.0))
+          output_a_target_mpc = min(output_a_target_mpc, a_approach)
 
     # When following/stopping behind a lead vehicle, do not allow E2E vision model
     # to creep closer than the safe 4.0m standstill target
@@ -181,11 +190,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       if is_e2e:
         output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc)
 
-    # Automatic lead departure wakeup from standstill
+    # Automatic lead departure wakeup from standstill (strictly speed-based, lead actually driving away)
     lead_moving_away = ((sm['carState'].standstill or v_ego < 1.2) and
                         lead.present and
-                        (lead.vLead > 0.6 or lead.dRel > 5.0) and
-                        lead.modelProb > 0.5)
+                        lead.modelProb > 0.5 and
+                        lead.vLead > 0.8 and
+                        (lead.vLead > v_ego + 0.3))
     if lead_moving_away:
       output_should_stop_e2e = False
       output_should_stop_mpc = False

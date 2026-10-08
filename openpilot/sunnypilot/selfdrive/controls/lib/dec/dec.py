@@ -313,7 +313,8 @@ class DynamicExperimentalController:
       return
 
     # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
-    lead_moving_away = self._lead is not None and self._lead.present and (self._lead.vLead > 0.6 or self._lead.dRel > 5.0)
+    lead_moving_away = (self._lead is not None and self._lead.present and
+                        self._lead.vLead > 0.8 and (self._lead.vLead * 3.6 > self._v_ego_kph + 1.0))
     if lead_moving_away:
       self._standstill_count = 0
       self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
@@ -357,7 +358,8 @@ class DynamicExperimentalController:
       return
 
     # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
-    lead_moving_away = self._lead is not None and self._lead.present and (self._lead.vLead > 0.6 or self._lead.dRel > 5.0)
+    lead_moving_away = (self._lead is not None and self._lead.present and
+                        self._lead.vLead > 0.8 and (self._lead.vLead * 3.6 > self._v_ego_kph + 1.0))
     if lead_moving_away:
       self._standstill_count = 0
       self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)

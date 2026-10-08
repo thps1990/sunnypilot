@@ -322,14 +322,8 @@ class LongitudinalMpc:
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
     self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
 
-    # When the lead vehicle is stationary or coming to a stop (e.g. at traffic lights),
-    # scale t_follow down smoothly towards 0.6s so MPC does not artificially demand ~20m of empty headway,
-    # which prevents harsh early braking and allows a smooth, natural stop at ~4m.
-    lead_selected = radarstate.leadOne if self.source == LongitudinalPlanSource.lead0 else radarstate.leadTwo
-    if lead_selected.present and lead_selected.modelProb > 0.5:
-      t_follow = float(np.interp(max(0.0, lead_selected.vLead), [0.0, 8.0], [0.6, t_follow_base]))
-    else:
-      t_follow = t_follow_base
+    # Keep t_follow constant at configured personality headway so deceleration begins comfortably early
+    t_follow = t_follow_base
 
     self.yref[:,:] = 0.0
     for i in range(N):
