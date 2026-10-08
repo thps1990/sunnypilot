@@ -5,8 +5,8 @@ env:
   LFS_PUSH_URL: 'ssh://git@gitlab.com/sunnypilot/public/sunnypilot-new-lfs.git'
 
 on:
-  schedule:
-    - cron: '0 0 * * *'  # Runs at 00:00 UTC every day
+#  schedule:
+#    - cron: '0 0 * * *'  # Runs at 00:00 UTC every day (disabled in fork)
   push:
     branches:
       - 'master'
@@ -22,8 +22,8 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Skip if PR is in draft mode
-    if: (github.event_name != 'pull_request' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) && !github.event.pull_request.head.repo.fork
+    # Only run on official sunnypilot repository, skip in forks
+    if: github.repository == 'sunnypilot/sunnypilot' && (github.event_name != 'pull_request' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) && !github.event.pull_request.head.repo.fork
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
