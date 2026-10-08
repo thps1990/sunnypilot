@@ -12,7 +12,7 @@ from openpilot.selfdrive.controls.lib.accel_boost import AccelBoost
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource, get_T_FOLLOW
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop, is_lead_moving_away
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -172,7 +172,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if lead.present and lead.modelProb > 0.5 and v_ego > 14.0 and v_ego > (lead.vLead + 3.5):
       try:
         t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
-      except Exception:
+      except (NotImplementedError, KeyError, AttributeError):
         t_follow = 1.45
       d_safe = t_follow * max(0.0, lead.vLead) + 4.0
       d_avail = lead.dRel - d_safe
@@ -191,16 +191,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc)
 
     # Automatic lead departure wakeup from standstill (strictly speed-based, lead actually driving away)
-    lead_moving_away = ((sm['carState'].standstill or v_ego < 1.2) and
-                        lead.present and
-                        lead.modelProb > 0.5 and
-                        lead.vLead > 0.8 and
-                        (lead.vLead > v_ego + 0.3))
-    if lead_moving_away:
-      output_should_stop_e2e = False
-      output_should_stop_mpc = False
-      cruise_should_stop = False
-      output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc, 0.8)
+    lead_moving_away = is_lead_moving_away(lead, v_ego, sm['carState'].standstill)
+    if lead_moving_away and not sm['controlsState'].forceDecel:
+      # Check if a secondary obstacle (leadTwo) is blocking the path in front
+      lead_two = sm['radarState'].leadTwo
+      lead_two_blocking = (lead_two.present and lead_two.modelProb > 0.5 and
+                           (lead_two.dRel < lead.dRel or (lead_two.dRel < 6.0 and lead_two.vLead < 0.5)))
+      if not lead_two_blocking:
+        output_should_stop_e2e = False
+        output_should_stop_mpc = False
+        cruise_should_stop = False
+        output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc, 0.8)
 
     model_limited = (is_e2e and
                      self.accel_boost.apply(output_a_target_e2e) < min(output_a_target_mpc, self.a_cruise))

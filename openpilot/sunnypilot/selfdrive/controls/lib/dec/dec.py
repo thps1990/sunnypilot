@@ -12,6 +12,7 @@ from numpy import interp
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.constants import WMACConstants
+from openpilot.selfdrive.controls.lib.drive_helpers import is_lead_moving_away
 from typing import Literal
 
 # d-e2e, from modeldata.h
@@ -174,6 +175,7 @@ class DynamicExperimentalController:
     self._has_slow_down = False
     self._has_slowness = False
     self._has_mpc_fcw = False
+    self._v_ego = 0.0
     self._v_ego_kph = 0.0
     self._v_cruise_kph = 0.0
     self._has_standstill = False
@@ -208,6 +210,7 @@ class DynamicExperimentalController:
     md = sm['modelV2']
 
     self._lead = lead_one
+    self._v_ego = car_state.vEgo
     self._v_ego_kph = car_state.vEgo * 3.6
     self._v_cruise_kph = car_state.vCruise
     self._has_standstill = car_state.standstill
@@ -313,9 +316,7 @@ class DynamicExperimentalController:
       return
 
     # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
-    lead_moving_away = (self._lead is not None and self._lead.present and
-                        self._lead.vLead > 0.8 and (self._lead.vLead * 3.6 > self._v_ego_kph + 1.0))
-    if lead_moving_away:
+    if is_lead_moving_away(self._lead, self._v_ego, self._has_standstill):
       self._standstill_count = 0
       self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
       return
@@ -358,9 +359,7 @@ class DynamicExperimentalController:
       return
 
     # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
-    lead_moving_away = (self._lead is not None and self._lead.present and
-                        self._lead.vLead > 0.8 and (self._lead.vLead * 3.6 > self._v_ego_kph + 1.0))
-    if lead_moving_away:
+    if is_lead_moving_away(self._lead, self._v_ego, self._has_standstill):
       self._standstill_count = 0
       self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
       return

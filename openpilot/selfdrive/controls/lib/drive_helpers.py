@@ -17,6 +17,17 @@ MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
 def should_stop(v_ego: float, a_target: float) -> bool:
   return bool(v_ego < 0.3 and a_target < 0.1)
 
+
+def is_lead_moving_away(lead, v_ego: float, standstill: bool = False) -> bool:
+  """Determine if a lead vehicle is departing from standstill (strictly speed-based)."""
+  if lead is None or not getattr(lead, 'present', False):
+    return False
+  if getattr(lead, 'modelProb', 0.0) <= 0.5:
+    return False
+  if not (standstill or v_ego < 1.2):
+    return False
+  return bool(lead.vLead > 0.8 and (lead.vLead > v_ego + 0.3))
+
 def clamp(val, min_val, max_val):
   clamped_val = float(np.clip(val, min_val, max_val))
   return clamped_val, clamped_val != val
