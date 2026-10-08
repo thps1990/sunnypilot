@@ -82,7 +82,7 @@ class ModeTransitionManager:
     self.current_mode: ModeType = 'acc'
     self.mode_confidence = {'acc': 1.0, 'blended': 0.0}
     self.transition_timeout = 0
-    self.min_mode_duration = 10
+    self.min_mode_duration = 30
     self.mode_duration = 0
     self.emergency_override = False
 
@@ -179,6 +179,7 @@ class DynamicExperimentalController:
     self._has_standstill = False
     self._mpc_fcw_crash_cnt = 0
     self._standstill_count = 0
+    self._lead = None
     # debug
     self._endpoint_x = float('inf')
     self._expected_distance = 0.0
@@ -206,6 +207,7 @@ class DynamicExperimentalController:
     lead_one = sm['radarState'].leadOne
     md = sm['modelV2']
 
+    self._lead = lead_one
     self._v_ego_kph = car_state.vEgo * 3.6
     self._v_cruise_kph = car_state.vCruise
     self._has_standstill = car_state.standstill
@@ -310,7 +312,19 @@ class DynamicExperimentalController:
       self._mode_manager.request_mode('blended', confidence=1.0, emergency=True)
       return
 
-    # Standstill: use blended
+    # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
+    lead_moving_away = self._lead is not None and self._lead.present and (self._lead.vLead > 0.6 or self._lead.dRel > 5.0)
+    if lead_moving_away:
+      self._standstill_count = 0
+      self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
+      return
+
+    # If lead detected and not in standstill: always use ACC for reliable distance keeping
+    if self._has_lead_filtered and not (self._standstill_count > 3):
+      self._mode_manager.request_mode('acc', confidence=1.0)
+      return
+
+    # Standstill: use blended (e.g. stopped at red light / stop sign without lead)
     if self._standstill_count > 3:
       self._mode_manager.request_mode('blended', confidence=0.9)
       return
@@ -342,9 +356,21 @@ class DynamicExperimentalController:
       self._mode_manager.request_mode('blended', confidence=1.0, emergency=True)
       return
 
+    # Departure from standstill: if lead vehicle starts driving away, break standstill and switch to ACC immediately
+    lead_moving_away = self._lead is not None and self._lead.present and (self._lead.vLead > 0.6 or self._lead.dRel > 5.0)
+    if lead_moving_away:
+      self._standstill_count = 0
+      self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
+      return
+
     # If lead detected and not in standstill: always use ACC
     if self._has_lead_filtered and not (self._standstill_count > 3):
       self._mode_manager.request_mode('acc', confidence=1.0)
+      return
+
+    # Standstill: use blended (e.g. stopped at red light / stop sign without lead)
+    if self._standstill_count > 3:
+      self._mode_manager.request_mode('blended', confidence=0.9)
       return
 
     # Slow down scenarios: emergency for high urgency, normal for lower urgency
@@ -356,11 +382,6 @@ class DynamicExperimentalController:
         # Normal: blended with urgency-based confidence
         confidence = min(1.0, self._urgency * 1.3)
         self._mode_manager.request_mode('blended', confidence=confidence)
-      return
-
-    # Standstill: use blended
-    if self._standstill_count > 3:
-      self._mode_manager.request_mode('blended', confidence=0.9)
       return
 
     # Driving slow: use ACC (but not if actively slowing down)

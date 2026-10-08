@@ -10,7 +10,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.accel_boost import AccelBoost
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource, get_T_FOLLOW
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
@@ -157,6 +157,40 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # Caps acceleration so the car gains only ~3 to 5 km/h by the time the sign is reached.
       self.a_cruise = min(self.a_cruise, 0.45)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
+
+    lead = sm['radarState'].leadOne
+
+    # Proactive kinematic approach deceleration when closing in on a slower lead vehicle
+    if lead.present and lead.modelProb > 0.5 and v_ego > (lead.vLead + 1.5):
+      try:
+        t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
+      except Exception:
+        t_follow = 1.45
+      d_safe = t_follow * max(0.0, lead.vLead) + 4.0
+      d_avail = lead.dRel - d_safe
+      if d_avail > 1.0:
+        delta_v = v_ego - lead.vLead
+        a_approach = - (delta_v ** 2) / (2.0 * d_avail)
+        a_approach = float(np.clip(a_approach, ACCEL_MIN, 0.0))
+        output_a_target_mpc = min(output_a_target_mpc, a_approach)
+
+    # When following/stopping behind a lead vehicle, do not allow E2E vision model
+    # to creep closer than the safe 4.0m standstill target
+    if lead.present and lead.modelProb > 0.5 and lead.dRel < 5.0 and lead.vLead < 1.0:
+      output_should_stop_mpc = True
+      if is_e2e:
+        output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc)
+
+    # Automatic lead departure wakeup from standstill
+    lead_moving_away = ((sm['carState'].standstill or v_ego < 1.2) and
+                        lead.present and
+                        (lead.vLead > 0.6 or lead.dRel > 5.0) and
+                        lead.modelProb > 0.5)
+    if lead_moving_away:
+      output_should_stop_e2e = False
+      output_should_stop_mpc = False
+      cruise_should_stop = False
+      output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc, 0.8)
 
     model_limited = (is_e2e and
                      self.accel_boost.apply(output_a_target_e2e) < min(output_a_target_mpc, self.a_cruise))
