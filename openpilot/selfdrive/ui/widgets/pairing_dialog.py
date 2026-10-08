@@ -2,6 +2,7 @@ import pyray as rl
 import time
 
 from openpilot.common.api import Api
+from openpilot.common.api.comma_connect import API_HOST
 from openpilot.common.qrcode import make_texture
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
@@ -34,7 +35,8 @@ class PairingDialog(Widget):
     except Exception:
       cloudlog.exception("Failed to get pairing token")
       token = ""
-    return f"https://connect.comma.ai/?pair={token}"
+    portal = "https://stable.konik.ai" if "konik" in API_HOST else "https://connect.comma.ai"
+    return f"{portal}/?pair={token}"
 
   def _generate_qr_code(self) -> None:
     try:
@@ -97,11 +99,18 @@ class PairingDialog(Widget):
     return -1
 
   def _render_instructions(self, rect: rl.Rectangle) -> None:
-    instructions = [
-      tr("Go to https://connect.comma.ai on your phone"),
-      tr("Click \"add new device\" and scan the QR code on the right"),
-      tr("Bookmark connect.comma.ai to your home screen to use it like an app"),
-    ]
+    if "konik" in API_HOST:
+      instructions = [
+        tr("Go to https://stable.konik.ai on your phone"),
+        tr("Click \"add new device\" and scan the QR code on the right"),
+        tr("Bookmark stable.konik.ai to your home screen to use it like an app"),
+      ]
+    else:
+      instructions = [
+        tr("Go to https://connect.comma.ai on your phone"),
+        tr("Click \"add new device\" and scan the QR code on the right"),
+        tr("Bookmark connect.comma.ai to your home screen to use it like an app"),
+      ]
 
     font = gui_app.font(FontWeight.BOLD)
     y = rect.y

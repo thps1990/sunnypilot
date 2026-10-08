@@ -20,3 +20,12 @@ if [ -z "$AGNOS_VERSION" ]; then
 fi
 
 export STAGING_ROOT="/data/safe_staging"
+
+# Konik Stable environment configuration
+if [ -f "/data/konik-stable.env" ]; then
+  source "/data/konik-stable.env"
+fi
+
+export API_HOST="${API_HOST:-https://api.konik.ai}"
+export ATHENA_HOST="${ATHENA_HOST:-wss://athena.konik.ai}"
+export MAPS_HOST="${MAPS_HOST:-https://maps.konik.ai}"
