@@ -182,7 +182,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       d_target = t_follow * v_lead_pos + 4.0
       d_min_buffer = max(3.5, 0.5 * v_lead_pos + 3.0)
 
-      a_lead_comp = min(lead.aLeadK, 0.0) if lead.aLeadK < -0.4 else 0.0
+      # Headroom-aware lead deceleration compensation:
+      # If distance is compressed (at or below target headway), match lead deceleration 100%
+      # to prevent late-braking near-collisions. If there is ample headroom (e.g. 40m gap at 50 km/h),
+      # fade lead decel compensation to 0 so the car smoothly rolls and lets the gap reduce naturally.
+      if lead.dRel <= d_target:
+        lead_comp_weight = 1.0
+      else:
+        headroom = lead.dRel - d_target
+        buffer_zone = max(3.0, 0.4 * d_target)
+        lead_comp_weight = float(np.clip(1.0 - headroom / buffer_zone, 0.0, 1.0))
+
+      a_lead_comp = (min(lead.aLeadK, 0.0) if lead.aLeadK < -0.4 else 0.0) * lead_comp_weight
 
       if delta_v > 0.4 or a_lead_comp < 0.0:
         if lead.dRel > d_target:
