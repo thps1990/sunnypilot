@@ -153,7 +153,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     if self.sla.is_active and self.sla.state == SpeedLimitAssistState.adapting:
-      j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
+      j_cruise = 2.0  # Responsive yet comfortable jerk rate for approaching speed limit signs
       if self.a_cruise > self.output_a_target:
         self.a_cruise = max(self.output_a_target, self.a_cruise - j_cruise * self.dt)
       else:

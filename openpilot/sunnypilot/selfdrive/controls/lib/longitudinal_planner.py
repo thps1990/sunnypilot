@@ -70,6 +70,13 @@ class LongitudinalPlannerSP:
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])
+
+    # If Speed Limit Assist is active/adapting to an upcoming higher speed limit before a sign,
+    # allow SLA target to raise v_cruise so gentle pre-acceleration can occur.
+    if self.sla.is_active and 0.0 < self.sla.output_v_target < 250.0:
+      if getattr(self.sla, '_distance', 0.0) > 0.0 and self.sla.output_v_target > v_cruise:
+        self.source = LongitudinalPlanSource.speedLimitAssist
+
     self.output_v_target, self.output_a_target = targets[self.source]
     return self.output_v_target, self.output_a_target
 
