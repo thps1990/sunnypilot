@@ -166,20 +166,38 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     lead = sm['radarState'].leadOne
 
-    # Proactive kinematic approach deceleration when closing in on a significantly slower lead vehicle at higher speeds.
-    # Strictly active only at road speeds (v_ego > 14 m/s ~ 50 km/h) with significant closing rate (delta_v > 3.5 m/s ~ 13 km/h)
-    # and deadband (a_approach < -0.25 m/s^2) to completely avoid micro-brake hunting during normal cruising.
-    if lead.present and lead.modelProb > 0.5 and v_ego > 14.0 and v_ego > (lead.vLead + 3.5):
+    # Proactive kinematic foresight and approach deceleration:
+    # 1. Smooth, early deceleration when closing in on a slower lead vehicle from a distance.
+    # 2. Firm, authoritative deceleration when lead vehicle is actively braking or distance is compressed,
+    #    preventing late-braking near-collisions and false FCW alarms.
+    # 3. Deadband on tiny speed fluctuations during steady following to completely prevent micro-brake hunting.
+    if lead.present and lead.modelProb > 0.5 and v_ego > 2.5:
       try:
         t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
       except (NotImplementedError, KeyError, AttributeError):
         t_follow = 1.45
-      d_safe = t_follow * max(0.0, lead.vLead) + 4.0
-      d_avail = lead.dRel - d_safe
-      if d_avail > 2.0:
-        delta_v = v_ego - lead.vLead
-        a_approach = - (delta_v ** 2) / (2.0 * d_avail)
-        if a_approach < -0.25:
+
+      v_lead_pos = max(0.0, lead.vLead)
+      delta_v = v_ego - lead.vLead  # Closing speed (positive when closing in)
+      d_target = t_follow * v_lead_pos + 4.0
+      d_min_buffer = max(3.5, 0.5 * v_lead_pos + 3.0)
+
+      a_lead_comp = min(lead.aLeadK, 0.0) if lead.aLeadK < -0.4 else 0.0
+
+      if delta_v > 0.4 or a_lead_comp < 0.0:
+        if lead.dRel > d_target:
+          # Farther than target headway: smooth, proactive early deceleration
+          d_margin = max(2.0, lead.dRel - d_target)
+          a_close = - (max(0.0, delta_v) ** 2) / (2.0 * d_margin)
+        else:
+          # Closer than target headway: firm deceleration toward minimum buffer
+          d_margin = max(1.5, lead.dRel - d_min_buffer)
+          a_close = - (max(0.0, delta_v) ** 2) / (2.0 * d_margin)
+
+        a_approach = a_lead_comp + a_close
+
+        # Deadband: ignore tiny corrections during steady following (prevents Tesla regen hunting)
+        if a_approach < -0.20:
           a_approach = float(np.clip(a_approach, ACCEL_MIN, 0.0))
           output_a_target_mpc = min(output_a_target_mpc, a_approach)
 
