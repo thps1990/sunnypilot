@@ -92,14 +92,14 @@ class SmartCruiseControlVision:
 
       # get the maximum lat accel from the model
       predicted_lat_accels = rate_plan * vel_plan
-      self.max_pred_lat_acc = np.percentile(predicted_lat_accels, 97)
+      self.max_pred_lat_acc = float(np.percentile(predicted_lat_accels, 97)) if len(predicted_lat_accels) > 0 else 0.0
 
       # get the maximum curve based on the current velocity
       v_ego = max(self.v_ego, 0.1)  # ensure a value greater than 0 for calculations
       max_curve = self.max_pred_lat_acc / (v_ego**2)
 
       # Get the target velocity for the maximum curve
-      self.v_target = (_A_LAT_REG_MAX / max_curve) ** 0.5
+      self.v_target = (_A_LAT_REG_MAX / max_curve) ** 0.5 if max_curve > 1e-4 else V_CRUISE_UNSET
 
   def _update_state_machine(self) -> tuple[bool, bool]:
     # ENABLED, ENTERING, TURNING, LEAVING, OVERRIDING

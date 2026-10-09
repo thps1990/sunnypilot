@@ -268,6 +268,8 @@ def run_sign_scenario_on_device(sc):
         selfdrive_state = messaging.new_message('selfdriveState')
         vehicle_params = messaging.new_message('vehicleParameters')
         model = messaging.new_message('modelV2')
+        model.modelV2.velocity.x = [float(v_ego)] * 33
+        model.modelV2.orientationRate.z = [0.0] * 33
         car_state_sp = messaging.new_message('carStateSP')
         live_map_data_sp = messaging.new_message('liveMapDataSP')
         gps_data = messaging.new_message('gpsLocation')
