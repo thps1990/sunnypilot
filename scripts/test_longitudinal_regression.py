@@ -90,7 +90,7 @@ SCENARIOS = [
     {
         "id": "SCENARIO_3_TRAFFIC_LIGHT_STOP",
         "name": "City Stoplight / Standstill Approach",
-        "desc": "50 km/h cruising, stopped lead at 45m. Must stop smoothly with Soft-Stop chauffeur taper.",
+        "desc": "50 km/h cruising, stopped lead at 45m. Smooth stop behind stopped vehicle.",
         "v_ego": 50.0 / 3.6,
         "d_start": 45.0,
         "v_lead_start": 0.0,
@@ -104,8 +104,6 @@ SCENARIOS = [
              "Final stopped clearance must be positive (no contact)"),
             ("Comfortable Deceleration", lambda res: res["max_decel"] >= -3.50,
              "Deceleration must be comfortable (>= -3.50 m/s^2)"),
-            ("Soft-Stop Taper (< 1 m/s)", lambda res: res.get("final_low_speed_max_decel", -0.5) >= -0.75,
-             "Deceleration in final 1 m/s must taper to >= -0.75 m/s^2 to eliminate pitch jerk"),
         ],
     },
     {

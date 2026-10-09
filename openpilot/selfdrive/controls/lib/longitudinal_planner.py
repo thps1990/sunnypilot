@@ -10,9 +10,9 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.accel_boost import AccelBoost
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource, get_T_FOLLOW
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop, is_lead_moving_away
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
@@ -111,12 +111,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
-    # Synchronize filter to actual vehicle speed during braking/deceleration and standstill
-    # to prevent phantom speed lag from falsely triggering FCW or overestimating stopping needs
-    if self.output_a_target < 0.0 or sm['carState'].aEgo < -0.2:
-      self.v_desired_filter.x = min(self.v_desired_filter.x, v_ego + 0.3)
-    if sm['carState'].standstill or v_ego < 0.2:
-      self.v_desired_filter.x = min(self.v_desired_filter.x, v_ego)
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
@@ -153,7 +147,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
                                      accel_coast, self.allow_throttle)
     if self.sla.is_active and self.sla.state == SpeedLimitAssistState.adapting:
-      j_cruise = 2.0  # Responsive yet comfortable jerk rate for approaching speed limit signs
+      j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
       if self.a_cruise > self.output_a_target:
         self.a_cruise = max(self.output_a_target, self.a_cruise - j_cruise * self.dt)
       else:
@@ -164,77 +158,6 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.a_cruise = min(self.a_cruise, 0.45)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
 
-    lead = sm['radarState'].leadOne
-
-    # Proactive kinematic foresight and approach deceleration:
-    # 1. Smooth, early deceleration when closing in on a slower lead vehicle from a distance.
-    # 2. Firm, authoritative deceleration when lead vehicle is actively braking or distance is compressed,
-    #    preventing late-braking near-collisions and false FCW alarms.
-    # 3. Deadband on tiny speed fluctuations during steady following to completely prevent micro-brake hunting.
-    if lead.present and lead.modelProb > 0.5 and v_ego > 2.5:
-      try:
-        t_follow = get_T_FOLLOW(sm['selfdriveState'].personality)
-      except (NotImplementedError, KeyError, AttributeError):
-        t_follow = 1.45
-
-      v_lead_pos = max(0.0, lead.vLead)
-      delta_v = v_ego - lead.vLead  # Closing speed (positive when closing in)
-      d_target = t_follow * v_lead_pos + 4.0
-      d_min_buffer = max(3.5, 0.5 * v_lead_pos + 3.0)
-
-      # Headroom-aware lead deceleration compensation:
-      # If distance is compressed (at or below target headway), match lead deceleration 100%
-      # to prevent late-braking near-collisions. If there is ample headroom (e.g. 40m gap at 50 km/h),
-      # fade lead decel compensation to 0 so the car smoothly rolls and lets the gap reduce naturally.
-      if lead.dRel <= d_target:
-        lead_comp_weight = 1.0
-      else:
-        headroom = lead.dRel - d_target
-        buffer_zone = max(3.0, 0.4 * d_target)
-        lead_comp_weight = float(np.clip(1.0 - headroom / buffer_zone, 0.0, 1.0))
-
-      a_lead_comp = (min(lead.aLeadK, 0.0) if lead.aLeadK < -0.4 else 0.0) * lead_comp_weight
-
-      if delta_v > 0.4 or a_lead_comp < 0.0:
-        if lead.dRel > d_target:
-          # Farther than target headway: smooth, proactive early deceleration
-          d_margin = max(2.0, lead.dRel - d_target)
-          a_close = - (max(0.0, delta_v) ** 2) / (2.0 * d_margin)
-        else:
-          # Closer than target headway: firm deceleration toward minimum buffer
-          d_margin = max(1.5, lead.dRel - d_min_buffer)
-          a_close = - (max(0.0, delta_v) ** 2) / (2.0 * d_margin)
-
-        a_approach = a_lead_comp + a_close
-
-        # Deadband: ignore tiny corrections during steady following (prevents Tesla regen hunting)
-        if a_approach < -0.20:
-          a_approach = float(np.clip(a_approach, ACCEL_MIN, 0.0))
-          output_a_target_mpc = min(output_a_target_mpc, a_approach)
-
-    # When following/stopping behind a lead vehicle, do not allow E2E vision model
-    # to creep closer than the safe 4.0m standstill target.
-    # Only declare should_stop when vehicle is already practically at standstill (v_ego < 0.3)
-    # to prevent premature engagement of harsh holding brakes while still rolling.
-    if lead.present and lead.modelProb > 0.5 and lead.dRel < 5.0 and lead.vLead < 1.0:
-      if v_ego < 0.3:
-        output_should_stop_mpc = True
-      if is_e2e:
-        output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc)
-
-    # Automatic lead departure wakeup from standstill (strictly speed-based, lead actually driving away)
-    lead_moving_away = is_lead_moving_away(lead, v_ego, sm['carState'].standstill)
-    if lead_moving_away and not sm['controlsState'].forceDecel:
-      # Check if a secondary obstacle (leadTwo) is blocking the path in front
-      lead_two = sm['radarState'].leadTwo
-      lead_two_blocking = (lead_two.present and lead_two.modelProb > 0.5 and
-                           (lead_two.dRel < lead.dRel or (lead_two.dRel < 6.0 and lead_two.vLead < 0.5)))
-      if not lead_two_blocking:
-        output_should_stop_e2e = False
-        output_should_stop_mpc = False
-        cruise_should_stop = False
-        output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc, 0.8)
-
     model_limited = (is_e2e and
                      self.accel_boost.apply(output_a_target_e2e) < min(output_a_target_mpc, self.a_cruise))
     mads_enabled = False
@@ -244,6 +167,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.accel_boost.update(sm['selfdriveState'].enabled, sm['carState'].gasPressed, model_limited,
                             is_e2e=is_e2e, active=active, v_ego=v_ego)
     output_a_target_e2e = self.accel_boost.apply(output_a_target_e2e)
+
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
@@ -252,30 +176,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
-    # Soft-Stop: Chauffeur brake tapering at low speeds (< 1.5 m/s / 5.4 km/h)
-    # Smoothly eases deceleration as vehicle approaches standstill,
-    # eliminating suspension pitch recoil / rebound jerk ("nicken im Auto").
-    emergency_stop = (lead.present and lead.dRel < 2.5) or self.fcw
-    if not emergency_stop and v_ego < 1.5 and output_a_target < -0.3:
-      a_soft_stop_min = np.interp(v_ego, [0.1, 0.4, 0.8, 1.5], [-0.35, -0.60, -1.00, ACCEL_MIN])
-      output_a_target = max(output_a_target, a_soft_stop_min)
-
-    # Smooth positive acceleration during candidate or DEC mode transitions, and progressive brake release
+    # Smooth positive acceleration during candidate or DEC mode transitions
     if output_a_target > a_prev:
-      if a_prev < 0.0:
-        j_release = 2.5  # Smooth, progressive brake release rate (~0.3-0.4s to 0)
-        output_a_target = min(output_a_target, a_prev + j_release * self.dt)
-      else:
-        j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
-        output_a_target = min(output_a_target, a_prev + j_cruise * self.dt)
+      j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
+      output_a_target = min(output_a_target, a_prev + j_cruise * self.dt)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     # Keep a_cruise synchronized to actual commanded acceleration while in E2E mode
-    # so exiting E2E mode smoothly ramps from the current acceleration level.
-    # Never clamp a_cruise into negative braking territory.
+    # so exiting E2E mode smoothly ramps from the current acceleration level
     if is_e2e:
-      self.a_cruise = min(self.a_cruise, max(0.0, self.output_a_target))
+      self.a_cruise = min(self.a_cruise, self.output_a_target)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
 

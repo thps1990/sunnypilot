@@ -54,7 +54,7 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 4.0
+STOP_DISTANCE = 6.0
 MIN_X_LEAD_FACTOR = 0.5
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
@@ -308,25 +308,19 @@ class LongitudinalMpc:
     return lead_xv
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
-    t_follow_base = get_T_FOLLOW(personality)
+    t_follow = get_T_FOLLOW(personality)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
-    # Offset obstacle distance only when approaching a standstill so the compiled Acados MPC
-    # solver (base 6.0m) smoothly achieves the configured STOP_DISTANCE (4.0m) at standstill,
-    # without dangerously reducing headway or triggering false FCW at driving speeds.
-    v_ego = self.x0[1]
-    standstill_offset = 6.0 - STOP_DISTANCE
-    stop_dist_offset = float(np.interp(v_ego, [1.0, 5.0], [standstill_offset, 0.0]))
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1]) + stop_dist_offset
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1]) + stop_dist_offset
+    # To estimate a safe distance from a moving lead, we calculate how much stopping
+    # distance that lead needs as a minimum. We can add that to the current distance
+    # and then treat that as a stopped car/obstacle at this new distance.
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
     self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
-
-    # Keep t_follow constant at configured personality headway so deceleration begins comfortably early
-    t_follow = t_follow_base
 
     self.yref[:,:] = 0.0
     for i in range(N):
@@ -341,8 +335,8 @@ class LongitudinalMpc:
     self.params[:,5] = LEAD_DANGER_FACTOR
 
     self.run()
-    planned_clearance = (lead_xv_0[FCW_IDXS,0] + stop_dist_offset) - self.x_sol[FCW_IDXS,0]
-    if np.any(planned_clearance < CRASH_DISTANCE) and radarstate.leadOne.modelProb > 0.9:
+    if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
+            radarstate.leadOne.modelProb > 0.9):
       self.crash_cnt += 1
     else:
       self.crash_cnt = 0
