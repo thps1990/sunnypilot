@@ -235,113 +235,123 @@ def run_sign_scenario_on_device(sc):
     from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 
     params = Params()
-    # Explicitly ensure SpeedLimitMode is 3 (assist) for the test
+    # Save user offset settings and test with 0 offset for strict sign speed validation
+    old_offset_type = params.get("SpeedLimitOffsetType")
+    old_offset_val = params.get("SpeedLimitValueOffset")
     params.put("SpeedLimitMode", 3)
+    params.put("SpeedLimitOffsetType", 0)
+    params.put("SpeedLimitValueOffset", 0)
 
-    CP = CarInterface.get_non_essential_params(CAR.TESLA_MODEL_Y)
-    CP.openpilotLongitudinalControl = True
-    CP.pcmCruise = True
-    CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.TESLA_MODEL_Y)
-    CP_SP.pcmCruiseSpeed = True
+    try:
+        CP = CarInterface.get_non_essential_params(CAR.TESLA_MODEL_Y)
+        CP.openpilotLongitudinalControl = True
+        CP.pcmCruise = True
+        CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.TESLA_MODEL_Y)
+        CP_SP.pcmCruiseSpeed = True
 
-    planner = LongitudinalPlanner(CP, CP_SP, init_v=sc["v_ego"])
+        planner = LongitudinalPlanner(CP, CP_SP, init_v=sc["v_ego"])
 
-    dt = 0.05
-    steps = int(sc["duration"] / dt)
-    v_ego = sc["v_ego"]
-    a_ego = 0.0
-    dist_to_sign = sc["sign_distance"]
-    current_limit = sc["current_limit"]
-    next_limit = sc["next_limit"]
+        dt = 0.05
+        steps = int(sc["duration"] / dt)
+        v_ego = sc["v_ego"]
+        a_ego = 0.0
+        dist_to_sign = sc["sign_distance"]
+        current_limit = sc["current_limit"]
+        next_limit = sc["next_limit"]
 
-    max_decel = 0.0
-    max_accel = 0.0
-    decel_start_dist = None
-    speed_at_50m = v_ego
-    speed_at_sign = None
+        max_decel = 0.0
+        max_accel = 0.0
+        decel_start_dist = None
+        speed_at_50m = v_ego
+        speed_at_sign = None
 
-    for step in range(steps):
-        radar_state = messaging.new_message('radarState')
-        car_state = messaging.new_message('carState')
-        car_control = messaging.new_message('carControl')
-        controls_state = messaging.new_message('controlsState')
-        selfdrive_state = messaging.new_message('selfdriveState')
-        vehicle_params = messaging.new_message('vehicleParameters')
-        model = messaging.new_message('modelV2')
-        model.modelV2.velocity.x = [float(v_ego)] * 33
-        model.modelV2.orientationRate.z = [0.0] * 33
-        car_state_sp = messaging.new_message('carStateSP')
-        live_map_data_sp = messaging.new_message('liveMapDataSP')
-        gps_data = messaging.new_message('gpsLocation')
+        for step in range(steps):
+            radar_state = messaging.new_message('radarState')
+            car_state = messaging.new_message('carState')
+            car_control = messaging.new_message('carControl')
+            controls_state = messaging.new_message('controlsState')
+            selfdrive_state = messaging.new_message('selfdriveState')
+            vehicle_params = messaging.new_message('vehicleParameters')
+            model = messaging.new_message('modelV2')
+            model.modelV2.velocity.x = [float(v_ego)] * 33
+            model.modelV2.orientationRate.z = [0.0] * 33
+            car_state_sp = messaging.new_message('carStateSP')
+            live_map_data_sp = messaging.new_message('liveMapDataSP')
+            gps_data = messaging.new_message('gpsLocation')
 
-        car_state.carState.vEgo = float(v_ego)
-        car_state.carState.aEgo = float(a_ego)
-        car_state.carState.vCruise = float(sc["v_cruise"] * 3.6)
-        car_state.carState.vCruiseCluster = float(sc["v_cruise"] * 3.6)
-        car_control.carControl.enabled = True
-        selfdrive_state.selfdriveState.enabled = True
-        controls_state.controlsState.longControlState = LongCtrlState.pid
-        gps_data.gpsLocation.unixTimestampMillis = int(time.time() * 1000)
+            car_state.carState.vEgo = float(v_ego)
+            car_state.carState.aEgo = float(a_ego)
+            car_state.carState.vCruise = float(sc["v_cruise"] * 3.6)
+            car_state.carState.vCruiseCluster = float(sc["v_cruise"] * 3.6)
+            car_control.carControl.enabled = True
+            selfdrive_state.selfdriveState.enabled = True
+            controls_state.controlsState.longControlState = LongCtrlState.pid
+            gps_data.gpsLocation.unixTimestampMillis = int(time.time() * 1000)
 
-        # liveMapDataSP
-        live_map_data_sp.liveMapDataSP.speedLimit = float(current_limit)
-        live_map_data_sp.liveMapDataSP.speedLimitValid = True
-        if dist_to_sign > 0.0:
-            live_map_data_sp.liveMapDataSP.speedLimitAhead = float(next_limit)
-            live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = float(dist_to_sign)
-            live_map_data_sp.liveMapDataSP.speedLimitAheadValid = True
-        else:
-            live_map_data_sp.liveMapDataSP.speedLimit = float(next_limit)
-            live_map_data_sp.liveMapDataSP.speedLimitAhead = 0.0
-            live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = 0.0
-            live_map_data_sp.liveMapDataSP.speedLimitAheadValid = False
+            # liveMapDataSP
+            live_map_data_sp.liveMapDataSP.speedLimit = float(current_limit)
+            live_map_data_sp.liveMapDataSP.speedLimitValid = True
+            if dist_to_sign > 0.0:
+                live_map_data_sp.liveMapDataSP.speedLimitAhead = float(next_limit)
+                live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = float(dist_to_sign)
+                live_map_data_sp.liveMapDataSP.speedLimitAheadValid = bool(dist_to_sign > 0.0)
+            else:
+                live_map_data_sp.liveMapDataSP.speedLimit = float(next_limit)
+                live_map_data_sp.liveMapDataSP.speedLimitAhead = 0.0
+                live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = 0.0
+                live_map_data_sp.liveMapDataSP.speedLimitAheadValid = False
 
-        sm = {
-            'radarState': radar_state.radarState,
-            'carState': car_state.carState,
-            'carControl': car_control.carControl,
-            'controlsState': controls_state.controlsState,
-            'selfdriveState': selfdrive_state.selfdriveState,
-            'vehicleParameters': vehicle_params.vehicleParameters,
-            'modelV2': model.modelV2,
-            'carStateSP': car_state_sp.carStateSP,
-            'liveMapDataSP': live_map_data_sp.liveMapDataSP,
-            'gpsLocation': gps_data.gpsLocation,
-        }
+            sm = {
+                'radarState': radar_state.radarState,
+                'carState': car_state.carState,
+                'carControl': car_control.carControl,
+                'controlsState': controls_state.controlsState,
+                'selfdriveState': selfdrive_state.selfdriveState,
+                'vehicleParameters': vehicle_params.vehicleParameters,
+                'modelV2': model.modelV2,
+                'carStateSP': car_state_sp.carStateSP,
+                'liveMapDataSP': live_map_data_sp.liveMapDataSP,
+                'gpsLocation': gps_data.gpsLocation,
+            }
 
-        planner.update(sm)
-        a_cmd = planner.output_a_target
-        a_ego = a_cmd
-        max_decel = min(max_decel, a_cmd)
-        max_accel = max(max_accel, a_cmd)
+            planner.update(sm)
+            a_cmd = planner.output_a_target
+            a_ego = a_cmd
+            max_decel = min(max_decel, a_cmd)
+            max_accel = max(max_accel, a_cmd)
 
-        if a_cmd < -0.3 and decel_start_dist is None:
-            decel_start_dist = dist_to_sign
+            if a_cmd < -0.3 and decel_start_dist is None:
+                decel_start_dist = dist_to_sign
 
-        if dist_to_sign <= 50.0 and speed_at_50m == sc["v_ego"]:
-            speed_at_50m = v_ego
+            if dist_to_sign <= 50.0 and speed_at_50m == sc["v_ego"]:
+                speed_at_50m = v_ego
 
-        prev_dist = dist_to_sign
-        v_ego = max(0.0, v_ego + a_cmd * dt)
-        dist_to_sign -= v_ego * dt
+            prev_dist = dist_to_sign
+            v_ego = max(0.0, v_ego + a_cmd * dt)
+            dist_to_sign -= v_ego * dt
 
-        if prev_dist > 0.0 and dist_to_sign <= 0.0 and speed_at_sign is None:
+            if prev_dist > 0.0 and dist_to_sign <= 0.0 and speed_at_sign is None:
+                speed_at_sign = v_ego
+
+        if speed_at_sign is None:
             speed_at_sign = v_ego
+        if decel_start_dist is None:
+            decel_start_dist = 0.0
 
-    if speed_at_sign is None:
-        speed_at_sign = v_ego
-    if decel_start_dist is None:
-        decel_start_dist = 0.0
-
-    return {
-        "max_decel": max_decel,
-        "max_accel": max_accel,
-        "decel_start_dist": decel_start_dist,
-        "speed_at_50m": speed_at_50m,
-        "speed_at_sign": speed_at_sign,
-        "final_speed": v_ego * 3.6,
-        "valid": True,
-    }
+        return {
+            "max_decel": max_decel,
+            "max_accel": max_accel,
+            "decel_start_dist": decel_start_dist,
+            "speed_at_50m": speed_at_50m,
+            "speed_at_sign": speed_at_sign,
+            "final_speed": v_ego * 3.6,
+            "valid": True,
+        }
+    finally:
+        if old_offset_type is not None:
+            params.put("SpeedLimitOffsetType", old_offset_type)
+        if old_offset_val is not None:
+            params.put("SpeedLimitValueOffset", old_offset_val)
 
 
 def run_scenario_on_device(sc):
