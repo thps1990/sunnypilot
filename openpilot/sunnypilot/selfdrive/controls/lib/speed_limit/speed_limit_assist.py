@@ -199,6 +199,8 @@ class SpeedLimitAssist:
   def get_adapting_state_target_acceleration(self) -> float:
     if self._distance > 5.0:
       accel = (self._speed_limit_final_last ** 2 - self.v_ego ** 2) / (2. * self._distance)
+      if accel > 0.0:
+        return float(np.clip(accel, 0.0, 0.45))
       return float(np.clip(accel, LIMIT_MIN_ACC, 0.0))
 
     return float(np.clip(self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N]), LIMIT_MIN_ACC, LIMIT_MAX_ACC))
@@ -208,7 +210,7 @@ class SpeedLimitAssist:
 
   def _update_confirmed_state(self):
     if self._has_speed_limit:
-      if self.v_offset < LIMIT_SPEED_OFFSET_TH:
+      if self.v_offset < LIMIT_SPEED_OFFSET_TH or (self._distance > 0.0 and self.v_offset > 1.0):
         self.state = SpeedLimitAssistState.adapting
       else:
         self.state = SpeedLimitAssistState.active

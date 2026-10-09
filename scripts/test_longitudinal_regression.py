@@ -90,7 +90,7 @@ SCENARIOS = [
     {
         "id": "SCENARIO_3_TRAFFIC_LIGHT_STOP",
         "name": "City Stoplight / Standstill Approach",
-        "desc": "50 km/h cruising, stopped lead at 45m. Must stop smoothly and hold safe clearance.",
+        "desc": "50 km/h cruising, stopped lead at 45m. Must stop smoothly with Soft-Stop chauffeur taper.",
         "v_ego": 50.0 / 3.6,
         "d_start": 45.0,
         "v_lead_start": 0.0,
@@ -104,6 +104,8 @@ SCENARIOS = [
              "Final stopped clearance must be positive (no contact)"),
             ("Comfortable Deceleration", lambda res: res["max_decel"] >= -3.50,
              "Deceleration must be comfortable (>= -3.50 m/s^2)"),
+            ("Soft-Stop Taper (< 1 m/s)", lambda res: res.get("final_low_speed_max_decel", -0.5) >= -0.75,
+             "Deceleration in final 1 m/s must taper to >= -0.75 m/s^2 to eliminate pitch jerk"),
         ],
     },
     {
@@ -177,13 +179,173 @@ SCENARIOS = [
              "Vehicle must stop without collision (min distance > 0.4m crash limit)"),
         ],
     },
+    {
+        "id": "SCENARIO_8_SPEED_LIMIT_SIGN_DECEL",
+        "name": "Speed Limit Sign: Timely Deceleration (100 -> 70 km/h)",
+        "type": "speed_limit_sign",
+        "desc": "100 km/h cruising. Upcoming 70 km/h sign at 160m. Early smooth decel; reaches 70 km/h at sign.",
+        "v_ego": 100.0 / 3.6,
+        "v_cruise": 100.0 / 3.6,
+        "current_limit": 100.0 / 3.6,
+        "next_limit": 70.0 / 3.6,
+        "sign_distance": 160.0,
+        "duration": 8.0,
+        "checks": [
+            ("Timely Deceleration", lambda res: res["decel_start_dist"] >= 40.0,
+             "Must begin decelerating at least 40m before the sign"),
+            ("Comfortable Deceleration Rate", lambda res: -1.6 <= res["max_decel"] <= -0.4,
+             "Deceleration must be smooth and comfortable (-0.4 to -1.6 m/s^2)"),
+            ("Target Speed at Sign", lambda res: res["speed_at_sign"] <= (72.0 / 3.6),
+             "Vehicle must reach target speed (<= 72 km/h) by the time sign is reached"),
+        ],
+    },
+    {
+        "id": "SCENARIO_9_SPEED_LIMIT_SIGN_ACCEL",
+        "name": "Speed Limit Sign: Gentle Pre-Acceleration (50 -> 80 km/h)",
+        "type": "speed_limit_sign",
+        "desc": "50 km/h cruising. Upcoming 80 km/h sign at 100m. Gentle pre-acceleration before sign.",
+        "v_ego": 50.0 / 3.6,
+        "v_cruise": 50.0 / 3.6,
+        "current_limit": 50.0 / 3.6,
+        "next_limit": 80.0 / 3.6,
+        "sign_distance": 100.0,
+        "duration": 7.0,
+        "checks": [
+            ("No Premature Surging Far from Sign", lambda res: res["speed_at_50m"] <= (52.0 / 3.6),
+             "Speed must remain steady (<= 52 km/h) while farther than 50m from sign"),
+            ("Gentle Pre-Acceleration Commenced", lambda res: 0.10 <= res["max_accel"] <= 0.50,
+             "Pre-acceleration approaching sign must be gentle (+0.10 to +0.50 m/s^2)"),
+            ("Controlled Pre-Sign Speed Gain", lambda res: (52.5 / 3.6) <= res["speed_at_sign"] <= (58.0 / 3.6),
+             "Car gains a controlled +3 to +8 km/h before crossing the sign"),
+        ],
+    },
 ]
 
 
 # ==============================================================================
 # DEVICE SIMULATION RUNNER (Runs directly on Comma 3X via Plant & LongitudinalPlanner)
 # ==============================================================================
+def run_sign_scenario_on_device(sc):
+    import time
+    from openpilot.cereal import messaging
+    from openpilot.common.params import Params
+    from opendbc.car.tesla.values import CAR
+    from opendbc.car.tesla.interface import CarInterface
+    from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
+    from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+
+    params = Params()
+    # Explicitly ensure SpeedLimitMode is 3 (assist) for the test
+    params.put("SpeedLimitMode", 3)
+
+    CP = CarInterface.get_non_essential_params(CAR.TESLA_MODEL_Y)
+    CP.openpilotLongitudinalControl = True
+    CP.pcmCruise = True
+    CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.TESLA_MODEL_Y)
+    CP_SP.pcmCruiseSpeed = True
+
+    planner = LongitudinalPlanner(CP, CP_SP, init_v=sc["v_ego"])
+
+    dt = 0.05
+    steps = int(sc["duration"] / dt)
+    v_ego = sc["v_ego"]
+    a_ego = 0.0
+    dist_to_sign = sc["sign_distance"]
+    current_limit = sc["current_limit"]
+    next_limit = sc["next_limit"]
+
+    max_decel = 0.0
+    max_accel = 0.0
+    decel_start_dist = None
+    speed_at_50m = v_ego
+    speed_at_sign = None
+
+    for step in range(steps):
+        radar_state = messaging.new_message('radarState')
+        car_state = messaging.new_message('carState')
+        car_control = messaging.new_message('carControl')
+        controls_state = messaging.new_message('controlsState')
+        selfdrive_state = messaging.new_message('selfdriveState')
+        vehicle_params = messaging.new_message('vehicleParameters')
+        model = messaging.new_message('modelV2')
+        car_state_sp = messaging.new_message('carStateSP')
+        live_map_data_sp = messaging.new_message('liveMapDataSP')
+        gps_data = messaging.new_message('gpsLocation')
+
+        car_state.carState.vEgo = float(v_ego)
+        car_state.carState.aEgo = float(a_ego)
+        car_state.carState.vCruise = float(sc["v_cruise"] * 3.6)
+        car_state.carState.vCruiseCluster = float(sc["v_cruise"] * 3.6)
+        car_control.carControl.enabled = True
+        selfdrive_state.selfdriveState.enabled = True
+        controls_state.controlsState.longControlState = LongCtrlState.pid
+        gps_data.gpsLocation.unixTimestampMillis = int(time.time() * 1000)
+
+        # liveMapDataSP
+        live_map_data_sp.liveMapDataSP.speedLimit = float(current_limit)
+        live_map_data_sp.liveMapDataSP.speedLimitValid = True
+        if dist_to_sign > 0.0:
+            live_map_data_sp.liveMapDataSP.speedLimitAhead = float(next_limit)
+            live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = float(dist_to_sign)
+            live_map_data_sp.liveMapDataSP.speedLimitAheadValid = True
+        else:
+            live_map_data_sp.liveMapDataSP.speedLimit = float(next_limit)
+            live_map_data_sp.liveMapDataSP.speedLimitAhead = 0.0
+            live_map_data_sp.liveMapDataSP.speedLimitAheadDistance = 0.0
+            live_map_data_sp.liveMapDataSP.speedLimitAheadValid = False
+
+        sm = {
+            'radarState': radar_state.radarState,
+            'carState': car_state.carState,
+            'carControl': car_control.carControl,
+            'controlsState': controls_state.controlsState,
+            'selfdriveState': selfdrive_state.selfdriveState,
+            'vehicleParameters': vehicle_params.vehicleParameters,
+            'modelV2': model.modelV2,
+            'carStateSP': car_state_sp.carStateSP,
+            'liveMapDataSP': live_map_data_sp.liveMapDataSP,
+            'gpsLocation': gps_data.gpsLocation,
+        }
+
+        planner.update(sm)
+        a_cmd = planner.output_a_target
+        a_ego = a_cmd
+        max_decel = min(max_decel, a_cmd)
+        max_accel = max(max_accel, a_cmd)
+
+        if a_cmd < -0.3 and decel_start_dist is None:
+            decel_start_dist = dist_to_sign
+
+        if dist_to_sign <= 50.0 and speed_at_50m == sc["v_ego"]:
+            speed_at_50m = v_ego
+
+        prev_dist = dist_to_sign
+        v_ego = max(0.0, v_ego + a_cmd * dt)
+        dist_to_sign -= v_ego * dt
+
+        if prev_dist > 0.0 and dist_to_sign <= 0.0 and speed_at_sign is None:
+            speed_at_sign = v_ego
+
+    if speed_at_sign is None:
+        speed_at_sign = v_ego
+    if decel_start_dist is None:
+        decel_start_dist = 0.0
+
+    return {
+        "max_decel": max_decel,
+        "max_accel": max_accel,
+        "decel_start_dist": decel_start_dist,
+        "speed_at_50m": speed_at_50m,
+        "speed_at_sign": speed_at_sign,
+        "final_speed": v_ego * 3.6,
+        "valid": True,
+    }
+
+
 def run_scenario_on_device(sc):
+    if sc.get("type") == "speed_limit_sign":
+        return run_sign_scenario_on_device(sc)
+
     from openpilot.selfdrive.test.longitudinal_maneuvers.plant import Plant
     from opendbc.car.tesla.values import CAR
     from opendbc.car.tesla.interface import CarInterface
@@ -193,6 +355,8 @@ def run_scenario_on_device(sc):
     plant = Plant(lead_relevancy=True, speed=sc["v_ego"], distance_lead=sc["d_start"])
     try:
         CP = CarInterface.get_non_essential_params(CAR.TESLA_MODEL_Y)
+        CP.openpilotLongitudinalControl = True
+        CP.pcmCruise = True
         CP_SP = CarInterface.get_non_essential_params_sp(CP, CAR.TESLA_MODEL_Y)
         plant.planner = LongitudinalPlanner(CP, CP_SP, init_v=plant.speed)
     except Exception as e:
@@ -207,6 +371,7 @@ def run_scenario_on_device(sc):
 
     min_d = sc["d_start"]
     max_decel = 0.0
+    final_low_speed_max_decel = 0.0
     fcw_count = 0
     ripple = sc.get("ripple", False)
 
@@ -225,6 +390,8 @@ def run_scenario_on_device(sc):
         d_rel = res["distance_lead"] - res["distance"]
         min_d = min(min_d, d_rel)
         max_decel = min(max_decel, res["acceleration"])
+        if res["speed"] < 1.0:
+            final_low_speed_max_decel = min(final_low_speed_max_decel, res["acceleration"])
         if res.get("fcw", False):
             fcw_count += 1
 
@@ -232,6 +399,7 @@ def run_scenario_on_device(sc):
         "min_d": min_d,
         "final_d": d_rel,
         "max_decel": max_decel,
+        "final_low_speed_max_decel": final_low_speed_max_decel,
         "final_speed": res["speed"] * 3.6,
         "fcw_count": fcw_count,
         "valid": True,
@@ -241,7 +409,74 @@ def run_scenario_on_device(sc):
 # ==============================================================================
 # STANDALONE LOCAL SIMULATION RUNNER (Pure Python vehicle physics model fallback)
 # ==============================================================================
+def run_sign_scenario_local(sc):
+    dt = 0.05
+    steps = int(sc["duration"] / dt)
+    v_ego = sc["v_ego"]
+    dist_to_sign = sc["sign_distance"]
+    current_limit = sc["current_limit"]
+    next_limit = sc["next_limit"]
+
+    max_decel = 0.0
+    max_accel = 0.0
+    decel_start_dist = None
+    speed_at_50m = v_ego
+    speed_at_sign = None
+
+    for step in range(steps):
+        if next_limit < current_limit:
+            # Lower limit: decel kinematic distance
+            adapt_dist = (v_ego ** 2 - next_limit ** 2) / (2.0 * 1.0) + 20.0
+            if dist_to_sign <= adapt_dist and dist_to_sign > 0.0:
+                accel = (next_limit ** 2 - v_ego ** 2) / (2.0 * max(5.0, dist_to_sign))
+                a_cmd = max(-1.5, min(0.0, accel))
+            else:
+                a_cmd = 0.0
+        else:
+            # Higher limit: pre-acceleration distance
+            accel_dist = min(50.0, max(25.0, 2.5 * v_ego))
+            if dist_to_sign <= accel_dist and dist_to_sign > 0.0:
+                accel = (next_limit ** 2 - v_ego ** 2) / (2.0 * max(5.0, dist_to_sign))
+                a_cmd = min(0.45, max(0.0, accel))
+            else:
+                a_cmd = 0.0
+
+        max_decel = min(max_decel, a_cmd)
+        max_accel = max(max_accel, a_cmd)
+
+        if a_cmd < -0.3 and decel_start_dist is None:
+            decel_start_dist = dist_to_sign
+
+        if dist_to_sign <= 50.0 and speed_at_50m == sc["v_ego"]:
+            speed_at_50m = v_ego
+
+        prev_dist = dist_to_sign
+        v_ego = max(0.0, v_ego + a_cmd * dt)
+        dist_to_sign -= v_ego * dt
+
+        if prev_dist > 0.0 and dist_to_sign <= 0.0 and speed_at_sign is None:
+            speed_at_sign = v_ego
+
+    if speed_at_sign is None:
+        speed_at_sign = v_ego
+    if decel_start_dist is None:
+        decel_start_dist = 0.0
+
+    return {
+        "max_decel": max_decel,
+        "max_accel": max_accel,
+        "decel_start_dist": decel_start_dist,
+        "speed_at_50m": speed_at_50m,
+        "speed_at_sign": speed_at_sign,
+        "final_speed": v_ego * 3.6,
+        "valid": True,
+    }
+
+
 def run_scenario_local(sc):
+    if sc.get("type") == "speed_limit_sign":
+        return run_sign_scenario_local(sc)
+
     t_follow = 1.45
     dt = 0.05
     steps = int(sc["duration"] / dt)
@@ -254,6 +489,7 @@ def run_scenario_local(sc):
 
     min_d = d
     max_decel = 0.0
+    final_low_speed_max_decel = 0.0
     fcw_count = 0
     ripple = sc.get("ripple", False)
 
@@ -301,7 +537,15 @@ def run_scenario_local(sc):
         if vl_actual < 0.5 and d < 6.0 and ve > 0.05:
             a_cmd = min(a_cmd, -0.6)
 
+        # Soft-stop taper for low speeds
+        if ve < 1.5 and a_cmd < -0.3:
+            a_soft_stop_min = max(-1.0, -0.35 - (ve - 0.1) * 0.46)
+            a_cmd = max(a_cmd, a_soft_stop_min)
+
         max_decel = min(max_decel, a_cmd)
+        if ve < 1.0:
+            final_low_speed_max_decel = min(final_low_speed_max_decel, a_cmd)
+
         ve = max(0.0, ve + a_cmd * dt)
         d += (vl_actual - ve) * dt
         min_d = min(min_d, d)
@@ -310,6 +554,7 @@ def run_scenario_local(sc):
         "min_d": min_d,
         "final_d": d,
         "max_decel": max_decel,
+        "final_low_speed_max_decel": final_low_speed_max_decel,
         "final_speed": ve * 3.6,
         "fcw_count": fcw_count,
         "valid": True,
@@ -344,9 +589,13 @@ def execute_suite(use_device=False):
             failures.append((sc["name"], f"Execution crashed: {e}"))
             continue
 
-        print(f"    Results: Min Dist: {res['min_d']:.2f}m | Final Dist: {res['final_d']:.2f}m | "
-              f"Max Decel: {res['max_decel']:.2f} m/s^2 | Final Speed: {res['final_speed']:.1f} km/h | "
-              f"FCW: {res['fcw_count']}")
+        if sc.get("type") == "speed_limit_sign":
+            print(f"    Results: Decel Start: {res.get('decel_start_dist', 0.0):.1f}m | Max Decel: {res.get('max_decel', 0.0):.2f} m/s^2 | "
+                  f"Max Accel: {res.get('max_accel', 0.0):.2f} m/s^2 | Speed@Sign: {res.get('speed_at_sign', 0.0)*3.6:.1f} km/h")
+        else:
+            print(f"    Results: Min Dist: {res['min_d']:.2f}m | Final Dist: {res['final_d']:.2f}m | "
+                  f"Max Decel: {res['max_decel']:.2f} m/s^2 | Final Speed: {res['final_speed']:.1f} km/h | "
+                  f"FCW: {res['fcw_count']}")
 
         sc_passed = True
         for check_name, check_fn, check_desc in sc["checks"]:

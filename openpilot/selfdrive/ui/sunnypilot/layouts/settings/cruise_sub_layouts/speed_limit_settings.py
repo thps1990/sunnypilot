@@ -135,9 +135,9 @@ class SpeedLimitSettingsLayout(Widget):
           - is not a release branch or not a disallowed brand, and
           - is not always disallwed
       """
-      sla_disallow_in_release = brand == "tesla" and ui_state.is_sp_release
+      sla_disallow_in_release = False
       sla_always_disallow = brand == "rivian"
-      sla_available = (has_long or has_icbm) and not sla_disallow_in_release and not sla_always_disallow
+      sla_available = (brand == "tesla") or ((has_long or has_icbm) and not sla_disallow_in_release and not sla_always_disallow)
 
       if not sla_available and speed_limit_mode_param == int(SpeedLimitMode.assist):
         ui_state.params.put("SpeedLimitMode", int(SpeedLimitMode.warning))

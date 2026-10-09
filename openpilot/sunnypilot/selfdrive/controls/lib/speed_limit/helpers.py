@@ -27,8 +27,13 @@ def set_speed_limit_assist_availability(CP: car.CarParams, CP_SP: custom.CarPara
   if params is None:
     params = Params()
 
+  # Tesla on this fork (vtb-sla-sunnylink) supports full longitudinal control and SLA.
+  # Never disallow or downgrade SpeedLimitMode on Tesla.
+  if CP.brand == "tesla":
+    return True
+
   is_release = params.get_bool("IsReleaseSpBranch")
-  disallow_in_release = CP.brand == "tesla" and is_release
+  disallow_in_release = False
   always_disallow = CP.brand == "rivian"
   allowed = True
 

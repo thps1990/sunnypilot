@@ -213,9 +213,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
           output_a_target_mpc = min(output_a_target_mpc, a_approach)
 
     # When following/stopping behind a lead vehicle, do not allow E2E vision model
-    # to creep closer than the safe 4.0m standstill target
+    # to creep closer than the safe 4.0m standstill target.
+    # Only declare should_stop when vehicle is already practically at standstill (v_ego < 0.3)
+    # to prevent premature engagement of harsh holding brakes while still rolling.
     if lead.present and lead.modelProb > 0.5 and lead.dRel < 5.0 and lead.vLead < 1.0:
-      output_should_stop_mpc = True
+      if v_ego < 0.3:
+        output_should_stop_mpc = True
       if is_e2e:
         output_a_target_e2e = max(output_a_target_e2e, output_a_target_mpc)
 
@@ -248,6 +251,14 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
+
+    # Soft-Stop: Chauffeur brake tapering at low speeds (< 1.5 m/s / 5.4 km/h)
+    # Smoothly eases deceleration as vehicle approaches standstill,
+    # eliminating suspension pitch recoil / rebound jerk ("nicken im Auto").
+    emergency_stop = (lead.present and lead.dRel < 2.5) or self.fcw
+    if not emergency_stop and v_ego < 1.5 and output_a_target < -0.3:
+      a_soft_stop_min = np.interp(v_ego, [0.1, 0.4, 0.8, 1.5], [-0.35, -0.60, -1.00, ACCEL_MIN])
+      output_a_target = max(output_a_target, a_soft_stop_min)
 
     # Smooth positive acceleration during candidate or DEC mode transitions, and progressive brake release
     if output_a_target > a_prev:
