@@ -238,9 +238,9 @@ def run_sign_scenario_on_device(sc):
     # Save user offset settings and test with 0 offset for strict sign speed validation
     old_offset_type = params.get("SpeedLimitOffsetType")
     old_offset_val = params.get("SpeedLimitValueOffset")
-    params.put("SpeedLimitMode", 3)
-    params.put("SpeedLimitOffsetType", 0)
-    params.put("SpeedLimitValueOffset", 0)
+    params.put("SpeedLimitMode", 3, block=True)
+    params.put("SpeedLimitOffsetType", 0, block=True)
+    params.put("SpeedLimitValueOffset", 0, block=True)
 
     try:
         CP = CarInterface.get_non_essential_params(CAR.TESLA_MODEL_Y)
@@ -349,9 +349,9 @@ def run_sign_scenario_on_device(sc):
         }
     finally:
         if old_offset_type is not None:
-            params.put("SpeedLimitOffsetType", old_offset_type)
+            params.put("SpeedLimitOffsetType", old_offset_type, block=True)
         if old_offset_val is not None:
-            params.put("SpeedLimitValueOffset", old_offset_val)
+            params.put("SpeedLimitValueOffset", old_offset_val, block=True)
 
 
 def run_scenario_on_device(sc):
