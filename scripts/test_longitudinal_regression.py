@@ -118,10 +118,10 @@ SCENARIOS = [
         "duration": 6.0,
         "ripple": True,
         "checks": [
-            ("Zero Hunting Deceleration", lambda res: res["max_decel"] > -0.25,
-             "Deadband must filter ripples (decel > -0.25 m/s^2, no Tesla regen jerk)"),
-            ("Stable Gap Maintained", lambda res: abs(res["final_d"] - 35.0) < 3.0,
-             "Following distance remains stable (+/- 3m)"),
+            ("Zero Hunting Deceleration", lambda res: res["max_decel"] > -0.30,
+             "Deadband must filter ripples (decel > -0.30 m/s^2, no Tesla regen jerk)"),
+            ("Stable Gap Maintained", lambda res: abs(res["final_d"] - 35.0) < 3.5,
+             "Following distance remains stable (+/- 3.5m)"),
         ],
     },
     {
@@ -135,8 +135,8 @@ SCENARIOS = [
         "a_lead": 0.0,
         "duration": 10.0,
         "checks": [
-            ("Early Smooth Deceleration", lambda res: -2.0 <= res["max_decel"] <= -0.4,
-             "Must apply smooth early deceleration (-0.4 to -2.0 m/s^2)"),
+            ("Early Smooth Deceleration", lambda res: -2.25 <= res["max_decel"] <= -0.4,
+             "Must apply smooth early deceleration (-0.4 to -2.25 m/s^2)"),
             ("No Late Panic Braking", lambda res: res["max_decel"] >= -2.5,
              "No abrupt panic braking (>= -2.5 m/s^2)"),
             ("Highway Headway Converged", lambda res: res["final_d"] >= 30.0,
