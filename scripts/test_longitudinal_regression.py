@@ -217,6 +217,26 @@ SCENARIOS = [
              "Car gains a controlled +3 to +8 km/h before crossing the sign"),
         ],
     },
+    {
+        "id": "SCENARIO_10_STANDSTILL_LEAD_DEPARTURE",
+        "name": "Standstill Lead Departure Wakeup (Zero Gedenksekunde)",
+        "desc": "Ego at standstill (0 km/h), stopped lead at 5m starts driving away (0->15 km/h). Brakes release promptly.",
+        "v_ego": 0.0,
+        "v_cruise": 50.0 / 3.6,
+        "d_start": 5.0,
+        "v_lead_start": 0.0,
+        "v_lead_end": 15.0 / 3.6,
+        "a_lead": 1.5,
+        "duration": 4.0,
+        "checks": [
+            ("Prompt Standstill Departure", lambda res: res["final_speed"] > 5.0,
+             "Vehicle must depart from standstill without delay (speed > 5 km/h after 4s)"),
+            ("Positive Departure Acceleration", lambda res: res.get("max_accel", 0.0) >= 0.25,
+             "Must command positive departure acceleration (max_accel >= 0.25 m/s^2)"),
+            ("Safe Following Clearance", lambda res: res["min_d"] > 3.0,
+             "Safe clearance maintained throughout departure (min_d > 3.0m)"),
+        ],
+    },
 ]
 
 
@@ -381,6 +401,7 @@ def run_scenario_on_device(sc):
 
     min_d = sc["d_start"]
     max_decel = 0.0
+    max_accel = 0.0
     final_low_speed_max_decel = 0.0
     fcw_count = 0
     ripple = sc.get("ripple", False)
@@ -396,10 +417,12 @@ def run_scenario_on_device(sc):
         if ripple:
             vl_actual += 0.3 * math.sin(t * 3.0) / 3.6
 
-        res = plant.step(v_lead=vl_actual, prob_lead=1.0, v_cruise=sc["v_ego"])
+        v_cruise_cmd = sc.get("v_cruise", sc["v_ego"])
+        res = plant.step(v_lead=vl_actual, prob_lead=1.0, v_cruise=v_cruise_cmd)
         d_rel = res["distance_lead"] - res["distance"]
         min_d = min(min_d, d_rel)
         max_decel = min(max_decel, res["acceleration"])
+        max_accel = max(max_accel, res["acceleration"])
         if res["speed"] < 1.0:
             final_low_speed_max_decel = min(final_low_speed_max_decel, res["acceleration"])
         if res.get("fcw", False):
@@ -409,6 +432,7 @@ def run_scenario_on_device(sc):
         "min_d": min_d,
         "final_d": d_rel,
         "max_decel": max_decel,
+        "max_accel": max_accel,
         "final_low_speed_max_decel": final_low_speed_max_decel,
         "final_speed": res["speed"] * 3.6,
         "fcw_count": fcw_count,

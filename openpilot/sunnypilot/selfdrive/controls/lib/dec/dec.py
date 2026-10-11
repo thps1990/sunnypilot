@@ -179,6 +179,7 @@ class DynamicExperimentalController:
     self._has_standstill = False
     self._mpc_fcw_crash_cnt = 0
     self._standstill_count = 0
+    self._lead_departing = False
     # debug
     self._endpoint_x = float('inf')
     self._expected_distance = 0.0
@@ -220,6 +221,11 @@ class DynamicExperimentalController:
     self._lead_filter.add_data(float(lead_one.present))
     lead_value = self._lead_filter.get_value() or 0.0
     self._has_lead_filtered = lead_value > WMACConstants.LEAD_PROB
+
+    # Lead departure detection from standstill (lead rolling forward while ego stopped)
+    self._lead_departing = bool(lead_one.present and getattr(lead_one, 'modelProb', 1.0) > 0.5 and
+                                lead_one.vLead > 0.6 and lead_one.dRel > 2.5 and
+                                (self._has_standstill or self._v_ego_kph < 5.0))
 
     # MPC FCW detection
     fcw_filtered_value = self._mpc_fcw_filter.get_value() or 0.0
@@ -310,6 +316,12 @@ class DynamicExperimentalController:
       self._mode_manager.request_mode('blended', confidence=1.0, emergency=True)
       return
 
+    # Lead departure from standstill: wake up immediately to ACC mode
+    if self._lead_departing:
+      self._standstill_count = 0
+      self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
+      return
+
     # Standstill: use blended
     if self._standstill_count > 3:
       self._mode_manager.request_mode('blended', confidence=0.9)
@@ -340,6 +352,12 @@ class DynamicExperimentalController:
     # EMERGENCY: MPC FCW - immediate blended mode
     if self._has_mpc_fcw:
       self._mode_manager.request_mode('blended', confidence=1.0, emergency=True)
+      return
+
+    # Lead departure from standstill: wake up immediately to ACC mode
+    if self._lead_departing:
+      self._standstill_count = 0
+      self._mode_manager.request_mode('acc', confidence=1.0, emergency=True)
       return
 
     # If lead detected and not in standstill: always use ACC

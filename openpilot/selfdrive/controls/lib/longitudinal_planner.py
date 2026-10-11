@@ -176,6 +176,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
+    # Lead departure prompt brake release from standstill:
+    # When ego vehicle is stopped (v_ego < 0.3 m/s) and lead vehicle starts moving away (vLead > 0.6 m/s):
+    # Release the holding brake immediately and command an initial gentle departure acceleration (0.35 m/s^2),
+    # eliminating standstill departure hesitation ("Gedenksekunde").
+    lead = sm['radarState'].leadOne
+    lead_two = sm['radarState'].leadTwo
+    lead_two_blocking = lead_two.present and getattr(lead_two, 'modelProb', 1.0) > 0.5 and lead_two.dRel < 4.0 and lead_two.vLead < 0.3
+    if v_ego < 0.3 and lead.present and getattr(lead, 'modelProb', 1.0) > 0.5 and lead.vLead > 0.6 and lead.dRel > 2.5 and not lead_two_blocking:
+      if not sm['controlsState'].forceDecel:
+        self.output_should_stop = False
+        output_a_target = max(output_a_target, 0.35)
+
     # Smooth positive acceleration during candidate or DEC mode transitions
     if output_a_target > a_prev:
       j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
