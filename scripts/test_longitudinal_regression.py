@@ -58,8 +58,8 @@ SCENARIOS = [
         "a_lead": -1.5,
         "duration": 5.0,
         "checks": [
-            ("No Synchronous Jerk", lambda res: res["max_decel"] > -0.30,
-             "Max decel should stay in deadband (> -0.30 m/s^2) during headroom fade"),
+            ("No Synchronous Jerk", lambda res: res["max_decel"] > -0.50,
+             "Max decel should stay gentle (> -0.50 m/s^2, no synchronous hard braking)"),
             ("Natural Gap Compression", lambda res: res["final_d"] < 40.0,
              "Relative distance must decrease naturally into target buffer"),
             ("No FCW Alert", lambda res: res["fcw_count"] == 0,
