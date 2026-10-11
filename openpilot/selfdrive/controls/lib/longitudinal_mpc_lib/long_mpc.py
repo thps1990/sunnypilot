@@ -68,15 +68,25 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
     raise NotImplementedError("Longitudinal personality not supported")
 
 
-def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
-  if personality==log.LongitudinalPersonality.relaxed:
-    return 1.75
-  elif personality==log.LongitudinalPersonality.standard:
-    return 1.45
-  elif personality==log.LongitudinalPersonality.aggressive:
-    return 1.25
+def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=0.0):
+  if personality == log.LongitudinalPersonality.relaxed:
+    base_t = 1.75
+    highway_t = 2.10
+  elif personality == log.LongitudinalPersonality.standard:
+    base_t = 1.45
+    highway_t = 1.80
+  elif personality == log.LongitudinalPersonality.aggressive:
+    base_t = 1.25
+    highway_t = 1.50
   else:
     raise NotImplementedError("Longitudinal personality not supported")
+
+  # Speed-dependent headway scaling (Option 2):
+  # In city / low speed (<= 50 km/h / 13.9 m/s), maintain standard nimble traffic headway.
+  # On highway (>= 100 km/h / 27.8 m/s), smoothly ramp up to highway_t for safe "halber Tacho" following.
+  if v_ego <= 13.89:
+    return base_t
+  return float(np.interp(v_ego, [13.89, 27.78], [base_t, highway_t]))
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
@@ -308,7 +318,8 @@ class LongitudinalMpc:
     return lead_xv
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
-    t_follow = get_T_FOLLOW(personality)
+    v_ego = self.x0[1]
+    t_follow = get_T_FOLLOW(personality, v_ego)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)

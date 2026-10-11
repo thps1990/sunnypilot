@@ -237,6 +237,26 @@ SCENARIOS = [
              "Safe clearance maintained throughout departure (min_d > 3.0m)"),
         ],
     },
+    {
+        "id": "SCENARIO_11_HIGHWAY_GAP_GUARD",
+        "name": "Highway Headway Maintenance (Anti-Tailgating Guard)",
+        "desc": "100 km/h cruising, lead vehicle at close 18m gap (0.65s) going 98 km/h. Gap Guard firmly restores safe headway.",
+        "v_ego": 100.0 / 3.6,
+        "v_cruise": 120.0 / 3.6,
+        "d_start": 18.0,
+        "v_lead_start": 98.0 / 3.6,
+        "v_lead_end": 98.0 / 3.6,
+        "a_lead": 0.0,
+        "duration": 6.0,
+        "checks": [
+            ("Decisive Gap Restoration Decel", lambda res: res["max_decel"] <= -0.60,
+             "Must command decisive deceleration (<= -0.60 m/s^2) rather than sluggish roll"),
+            ("Prevent Close Compression", lambda res: res["min_d"] >= 15.0,
+             "Distance must not compress into dangerous zone (min_d >= 15.0m)"),
+            ("Gap Expanding Safely", lambda res: res["final_d"] > res["min_d"],
+             "Following distance expands safely away from lead vehicle"),
+        ],
+    },
 ]
 
 

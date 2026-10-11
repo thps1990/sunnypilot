@@ -188,6 +188,20 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         self.output_should_stop = False
         output_a_target = max(output_a_target, 0.35)
 
+    # Highway Gap Guard (Option 3):
+    # Prevents sluggish MPC tailgating (e.g. 0.5s headway) at higher speeds.
+    # When distance compresses below safe thresholds, enforce decisive deceleration to restore headway.
+    if v_ego >= 12.0 and lead.present and getattr(lead, 'modelProb', 1.0) > 0.5 and not sm['controlsState'].forceDecel:
+      headway = lead.dRel / max(v_ego, 1.0)
+      v_rel = lead.vLead - v_ego
+      # Only intervene if lead is not actively pulling away (or if headway is critically low < 0.7s)
+      if headway < 0.7 or v_rel < 0.5:
+        if headway < 1.15:
+          a_guard = float(np.interp(headway, [0.4, 0.6, 0.8, 1.05, 1.15], [-1.4, -1.0, -0.65, -0.35, 0.0]))
+          if v_rel > 0.0:
+            a_guard += min(0.4, v_rel * 0.3)
+          output_a_target = min(output_a_target, a_guard)
+
     # Smooth positive acceleration during candidate or DEC mode transitions
     if output_a_target > a_prev:
       j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
